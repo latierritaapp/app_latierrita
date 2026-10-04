@@ -57,6 +57,10 @@ import { FlagEmoji, TextWithFlags } from './components/FlagEmoji';
 import logo from './assets/images/la_tierrita_logo.png';
 import { countTotalComments, isImageAvatar } from './utils/commentUtils';
 import { supabase, isSupabaseConfigured } from './lib/supabase';
+import { InfoSection } from './types/infoSection';
+import { DEFAULT_INFO_SECTIONS } from './data/defaultInfoSections';
+import { InfoSectionDetailModal } from './components/InfoSectionDetailModal';
+import { CreateInfoSectionModal } from './components/CreateInfoSectionModal';
 
 // Safe storage wrapper to prevent crash if iframe or browser blocks localStorage
 const safeLocalStorage = {
@@ -173,7 +177,54 @@ export default function App() {
   // --- INICIO SUB-TABS & CURRENCY STATE ---
   const [inicioSubTab, setInicioSubTab] = useState<'comunidad' | 'informacion'>('informacion');
   const [isCurrencyModalOpen, setIsCurrencyModalOpen] = useState(false);
-  const [activeInfoSection, setActiveInfoSection] = useState<string | null>(null);
+  // --- INFORMATIVE SECTIONS WITH TEXT EDITOR STATE ---
+  const [infoSections, setInfoSections] = useState<InfoSection[]>(() => {
+    try {
+      const saved = safeLocalStorage.getItem('tierrita_info_sections');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    }
+    return DEFAULT_INFO_SECTIONS;
+  });
+  const [activeInfoSection, setActiveInfoSection] = useState<InfoSection | null>(null);
+  const [isCreateInfoModalOpen, setIsCreateInfoModalOpen] = useState(false);
+
+  // Sync info sections to localStorage
+  useEffect(() => {
+    try {
+      safeLocalStorage.setItem('tierrita_info_sections', JSON.stringify(infoSections));
+    } catch {}
+  }, [infoSections]);
+
+  // Ordenar secciones informativas de nuevo a antigüedad (las más recientes arriba)
+  const sortedInfoSections = [...infoSections].sort((a, b) => {
+    const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    return timeB - timeA;
+  });
+
+  const handleSaveInfoSection = (updated: InfoSection) => {
+    setInfoSections(prev => prev.map(s => s.id === updated.id ? updated : s));
+    setActiveInfoSection(updated);
+  };
+
+  const handleDeleteInfoSection = (sectionId: string) => {
+    setInfoSections(prev => {
+      const updated = prev.filter(s => s.id !== sectionId);
+      try {
+        safeLocalStorage.setItem('tierrita_info_sections', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+    setActiveInfoSection(null);
+  };
+
   const [eurAmount, setEurAmount] = useState<string>('100');
   const [copAmount, setCopAmount] = useState<string>('374000.00');
   const [exchangeRate, setExchangeRate] = useState<number>(3740.03);
@@ -502,6 +553,53 @@ export default function App() {
     // Default to the official account @latierrita_app
     return DEFAULT_USERS[0];
   });
+
+  // Rastreo de secciones visitadas por usuario para ocultar la etiqueta 'Nuevo' tras abrirlas
+  const [visitedSectionIds, setVisitedSectionIds] = useState<string[]>(() => {
+    try {
+      const userKey = currentUser ? currentUser.id : 'guest';
+      const raw = safeLocalStorage.getItem(`tierrita_visited_sections_${userKey}`);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {}
+    return [];
+  });
+
+  // Actualizar lista de visitados cuando cambia de usuario
+  useEffect(() => {
+    try {
+      const userKey = currentUser ? currentUser.id : 'guest';
+      const raw = safeLocalStorage.getItem(`tierrita_visited_sections_${userKey}`);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          setVisitedSectionIds(parsed);
+          return;
+        }
+      }
+      setVisitedSectionIds([]);
+    } catch {}
+  }, [currentUser?.id]);
+
+  const handleOpenInfoSection = (section: InfoSection) => {
+    setActiveInfoSection(section);
+    // Marcar como visitada para este usuario
+    if (!visitedSectionIds.includes(section.id)) {
+      const updated = [...visitedSectionIds, section.id];
+      setVisitedSectionIds(updated);
+      const userKey = currentUser ? currentUser.id : 'guest';
+      try {
+        safeLocalStorage.setItem(`tierrita_visited_sections_${userKey}`, JSON.stringify(updated));
+      } catch {}
+    }
+  };
+
+  const handleCreateSection = (newSection: InfoSection) => {
+    setInfoSections(prev => [newSection, ...prev]);
+    handleOpenInfoSection(newSection);
+  };
 
   const safeTaggedPosts = currentUser.role === 'invitado' ? [] : (Array.isArray(taggedPosts) ? taggedPosts : INITIAL_TAGGED_POSTS);
   const safeSavedPosts = currentUser.role === 'invitado' ? [] : (Array.isArray(savedPosts) ? savedPosts : INITIAL_SAVED_POSTS);
@@ -1060,31 +1158,26 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#F5F6F8] dark:bg-gradient-to-b dark:from-[#003087] dark:to-[#000000] flex justify-center text-[#003087] dark:text-[#C4C4C4] font-sans transition-colors duration-200">
-      {/* ================= MODAL FULL-SCREEN INFO SECTIONS ================= */}
+      {/* ================= MODAL FULL-SCREEN INFO SECTIONS CON EDITOR DE TEXTO ================= */}
       {activeInfoSection && (
-        <div className="fixed inset-0 z-50 bg-white dark:bg-[#001133] flex flex-col p-0 animate-fadeIn">
-          <header className="sticky top-0 bg-white dark:bg-[#001845] border-b border-black/5 dark:border-white/10 px-5 py-4 flex items-center justify-between shrink-0 z-10 shadow-xs">
-            <button
-              type="button"
-              onClick={() => setActiveInfoSection(null)}
-              className="p-2 -ml-2 rounded-full hover:bg-black/5 dark:hover:bg-white/10 text-[#003087] dark:text-[#FFCD00] cursor-pointer transition-all"
-            >
-              <ArrowLeft className="w-6 h-6" />
-            </button>
-            <div className="flex items-center gap-2">
-               <img src={logo} alt="La Tierrita" className="h-8 w-auto" />
-            </div>
-            <div className="w-10"></div> {/* Spacer to center the brand */}
-          </header>
-          <div className="py-4 border-b border-black/5 dark:border-white/10 text-center">
-            <h2 className="font-sans font-black text-lg text-[#003087] dark:text-[#FFCD00]">
-              {activeInfoSection}
-            </h2>
-          </div>
-          <div className="flex-1 overflow-y-auto p-6 text-gray-700 dark:text-gray-300">
-            <p>Contenido detallado para: <strong>{activeInfoSection}</strong></p>
-          </div>
-        </div>
+        <InfoSectionDetailModal
+          isOpen={true}
+          section={activeInfoSection}
+          onClose={() => setActiveInfoSection(null)}
+          canEdit={currentUser.role === 'administrador' || currentUser.isStaff}
+          onSave={handleSaveInfoSection}
+          onDelete={handleDeleteInfoSection}
+        />
+      )}
+
+      {/* ================= MODAL CREAR NUEVA SECCIÓN INFORMATIVA ================= */}
+      {isCreateInfoModalOpen && (
+        <CreateInfoSectionModal
+          isOpen={true}
+          onClose={() => setIsCreateInfoModalOpen(false)}
+          onCreateSection={handleCreateSection}
+          authorName={currentUser.name}
+        />
       )}
       
       {/* ================= DESKTOP SIDEBAR LEFT ================= */}
@@ -1515,38 +1608,48 @@ export default function App() {
                       <ChevronRight className="w-4 h-4 text-[#C4C4C4] group-hover:translate-x-1 transition-transform" />
                     </button>
 
-                    {/* Botón informativo genérico */}
-                    {[
-                      { title: "Ingreso mínimo vital", desc: "Guía de requisitos y solicitud de ayuda estatal" },
-                      { title: "Ministerio de Inclusión", desc: "Seguridad Social, Migraciones y servicios de apoyo" },
-                      { title: "Trámites de Nacionalidad", desc: "Requisitos, exámenes CCSE/DELE y plazos para colombianos" },
-                      { title: "Requisitos de empadronamiento", desc: "Cómo registrar tu domicilio oficial en el ayuntamiento" },
-                      { title: "Tarjeta sanitaria", desc: "Acceso al sistema de salud pública y médico de cabecera" }
-                    ].map((item) => (
-                      <button
-                        key={item.title}
-                        type="button"
-                        onClick={() => setActiveInfoSection(item.title)}
-                        className="w-full py-4 px-5 rounded-2xl bg-[#003087]/5 dark:bg-[#002266]/40 hover:bg-[#003087]/10 dark:hover:bg-[#002266]/60 text-[#003087] dark:text-[#C4C4C4] border border-black/5 dark:border-white/10 font-bold text-sm shadow-xs active:scale-[0.99] transition-all flex items-center justify-between group cursor-pointer"
-                      >
-                        <div className="flex items-center gap-3">
-                          <div className="text-left">
-                            <h4 className="font-bold text-xs text-[#003087] dark:text-[#FFCD00] leading-tight">{item.title}</h4>
-                            <p className="text-[10px] text-[#C4C4C4] dark:text-[#C4C4C4]/80 font-medium mt-0.5">{item.desc}</p>
+                    {/* Lista dinámica de secciones informativas ordenadas de nuevo a antiguo */}
+                    {sortedInfoSections.map((item) => {
+                      const isNewForUser = (item.isCustom || item.id.startsWith('info-custom')) && !visitedSectionIds.includes(item.id);
+
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => handleOpenInfoSection(item)}
+                          className="w-full py-4 px-5 rounded-2xl bg-[#003087]/5 dark:bg-[#002266]/40 hover:bg-[#003087]/10 dark:hover:bg-[#002266]/60 text-[#003087] dark:text-[#C4C4C4] border border-black/5 dark:border-white/10 font-bold text-sm shadow-xs active:scale-[0.99] transition-all flex items-center justify-between group cursor-pointer text-left"
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <div className="text-left min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <h4 className="font-bold text-xs text-[#003087] dark:text-[#FFCD00] leading-tight">
+                                  {item.title}
+                                </h4>
+                                {isNewForUser && (
+                                  <span className="px-2 py-0.5 rounded-full text-[9px] font-black bg-[#FFCD00] text-[#003087] dark:bg-[#FFCD00] dark:text-[#003087] shadow-xs uppercase tracking-wider animate-pulse shrink-0">
+                                    Nuevo
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[10px] text-[#C4C4C4] dark:text-[#C4C4C4]/80 font-medium mt-0.5 truncate">
+                                {item.desc}
+                              </p>
+                            </div>
                           </div>
-                        </div>
-                        <ChevronRight className="w-4 h-4 text-[#C4C4C4] group-hover:translate-x-1 transition-transform" />
-                      </button>
-                    ))}
+                          <ChevronRight className="w-4 h-4 text-[#C4C4C4] group-hover:translate-x-1 transition-transform shrink-0 ml-2" />
+                        </button>
+                      );
+                    })}
                     
-                    {/* Floating Admin Button */}
+                    {/* Botón Flotante (+) para Administradores y Staff */}
                     {(currentUser.role === 'administrador' || currentUser.isStaff) && (
                       <button
                         type="button"
-                        onClick={() => alert('Funcionalidad de crear nueva sección en desarrollo')}
-                        className="fixed bottom-20 right-6 z-40 w-12 h-12 rounded-full bg-[#FFCD00] text-[#003087] flex items-center justify-center shadow-lg hover:scale-105 active:scale-95 transition-all"
+                        onClick={() => setIsCreateInfoModalOpen(true)}
+                        className="fixed bottom-20 right-6 z-40 w-13 h-13 rounded-full bg-[#FFCD00] hover:bg-[#ffe066] text-[#003087] flex items-center justify-center shadow-2xl hover:scale-110 active:scale-95 transition-all cursor-pointer border-2 border-white dark:border-[#001845]"
+                        title="Crear nueva sección informativa"
                       >
-                        <span className="text-xl font-black">+</span>
+                        <Plus className="w-6 h-6 stroke-[3]" />
                       </button>
                     )}
                   </div>
