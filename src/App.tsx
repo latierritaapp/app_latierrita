@@ -202,41 +202,60 @@ export default function App() {
     } catch {}
   }, [infoSections]);
 
-  // Load info sections from backend server on mount (so guests & other devices see all sections)
+  // Load info sections from Supabase (primary VPS database) and backend server (fallback)
   useEffect(() => {
-    fetch('/api/info-sections')
-      .then(res => res.ok ? res.json() : null)
-      .then((serverData: InfoSection[] | null) => {
-        if (Array.isArray(serverData) && serverData.length > 0) {
-          try {
-            const localSaved = safeLocalStorage.getItem('tierrita_info_sections');
-            if (localSaved) {
-              const localParsed: InfoSection[] = JSON.parse(localSaved);
-              if (Array.isArray(localParsed)) {
-                const serverIds = new Set(serverData.map(s => s.id));
-                const missingOnServer = localParsed.filter(s => s.isCustom && !serverIds.has(s.id));
-                if (missingOnServer.length > 0) {
-                  missingOnServer.forEach(sec => {
-                    fetch('/api/info-sections', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify(sec)
-                    }).catch(() => {});
-                  });
-                  const merged = [...missingOnServer, ...serverData];
-                  setInfoSections(merged);
-                  safeLocalStorage.setItem('tierrita_info_sections', JSON.stringify(merged));
-                  return;
-                }
-              }
-            }
-          } catch {}
+    const loadSections = async () => {
+      // 1. Try Supabase first if configured
+      if (isSupabaseConfigured() && supabase) {
+        try {
+          const { data, error } = await supabase
+            .from('info_sections')
+            .select('*')
+            .order('created_at', { ascending: false });
 
-          setInfoSections(serverData);
-          safeLocalStorage.setItem('tierrita_info_sections', JSON.stringify(serverData));
+          if (!error && Array.isArray(data) && data.length > 0) {
+            const mapped: InfoSection[] = data.map((row: any) => ({
+              id: String(row.id),
+              title: row.title,
+              desc: row.description || row.desc || '',
+              content: row.content || '',
+              createdAt: row.created_at || new Date().toISOString(),
+              updatedAt: row.updated_at || undefined,
+              authorName: row.author_name || undefined,
+              isCustom: row.is_custom !== undefined ? Boolean(row.is_custom) : true
+            }));
+
+            // Combine with default sections
+            const existingIds = new Set(mapped.map(m => m.id));
+            const merged = [
+              ...mapped,
+              ...DEFAULT_INFO_SECTIONS.filter(def => !existingIds.has(def.id))
+            ];
+
+            setInfoSections(merged);
+            safeLocalStorage.setItem('tierrita_info_sections', JSON.stringify(merged));
+            return;
+          }
+        } catch (supabaseErr) {
+          console.warn('Supabase info_sections fetch error:', supabaseErr);
         }
-      })
-      .catch(() => {});
+      }
+
+      // 2. Try Node/Express server API fallback
+      try {
+        const res = await fetch('/api/info-sections');
+        const contentType = res.headers.get('content-type') || '';
+        if (res.ok && contentType.includes('application/json')) {
+          const serverData = await res.json();
+          if (Array.isArray(serverData) && serverData.length > 0) {
+            setInfoSections(serverData);
+            safeLocalStorage.setItem('tierrita_info_sections', JSON.stringify(serverData));
+          }
+        }
+      } catch {}
+    };
+
+    loadSections();
   }, []);
 
   // Ordenar secciones informativas de nuevo a antigüedad (las más recientes arriba)
@@ -246,19 +265,34 @@ export default function App() {
     return timeB - timeA;
   });
 
-  const handleSaveInfoSection = (updated: InfoSection) => {
+  const handleSaveInfoSection = async (updated: InfoSection) => {
     setInfoSections(prev => prev.map(s => s.id === updated.id ? updated : s));
     setActiveInfoSection(updated);
 
-    // Persist to server API
+    // 1. Update in Supabase if configured
+    if (isSupabaseConfigured() && supabase) {
+      try {
+        await supabase.from('info_sections').upsert({
+          id: updated.id,
+          title: updated.title,
+          description: updated.desc,
+          content: updated.content,
+          updated_at: new Date().toISOString()
+        });
+      } catch (err) {
+        console.error('Error updating info section in Supabase:', err);
+      }
+    }
+
+    // 2. Persist to server API
     fetch(`/api/info-sections/${encodeURIComponent(updated.id)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updated)
-    }).catch(err => console.error('Error updating section on server:', err));
+    }).catch(() => {});
   };
 
-  const handleDeleteInfoSection = (sectionId: string) => {
+  const handleDeleteInfoSection = async (sectionId: string) => {
     setInfoSections(prev => {
       const updated = prev.filter(s => s.id !== sectionId);
       try {
@@ -268,10 +302,19 @@ export default function App() {
     });
     setActiveInfoSection(null);
 
-    // Persist to server API
+    // 1. Delete in Supabase if configured
+    if (isSupabaseConfigured() && supabase) {
+      try {
+        await supabase.from('info_sections').delete().eq('id', sectionId);
+      } catch (err) {
+        console.error('Error deleting info section from Supabase:', err);
+      }
+    }
+
+    // 2. Persist to server API
     fetch(`/api/info-sections/${encodeURIComponent(sectionId)}`, {
       method: 'DELETE'
-    }).catch(err => console.error('Error deleting section on server:', err));
+    }).catch(() => {});
   };
 
   const [eurAmount, setEurAmount] = useState<string>('100');
@@ -645,11 +688,29 @@ export default function App() {
     }
   };
 
-  const handleCreateSection = (newSection: InfoSection) => {
+  const handleCreateSection = async (newSection: InfoSection) => {
     setInfoSections(prev => [newSection, ...prev]);
     handleOpenInfoSection(newSection);
 
-    // Persist to server API so all guests and users see it
+    // 1. Persist to Supabase if configured
+    if (isSupabaseConfigured() && supabase) {
+      try {
+        await supabase.from('info_sections').upsert({
+          id: newSection.id,
+          title: newSection.title,
+          description: newSection.desc,
+          content: newSection.content,
+          author_name: newSection.authorName || currentUser.name,
+          is_custom: true,
+          created_at: newSection.createdAt,
+          updated_at: newSection.updatedAt
+        });
+      } catch (err) {
+        console.error('Error saving info section to Supabase:', err);
+      }
+    }
+
+    // 2. Persist to server API so all guests and users see it
     fetch('/api/info-sections', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
