@@ -203,59 +203,152 @@ export default function App() {
   }, [infoSections]);
 
   // Load info sections from Supabase (primary VPS database) and backend server (fallback)
-  useEffect(() => {
-    const loadSections = async () => {
-      // 1. Try Supabase first if configured
-      if (isSupabaseConfigured() && supabase) {
-        try {
-          const { data, error } = await supabase
-            .from('info_sections')
-            .select('*')
-            .order('created_at', { ascending: false });
+  const loadSections = async () => {
+    let loadedFromSupabase: InfoSection[] | null = null;
 
-          if (!error && Array.isArray(data) && data.length > 0) {
-            const mapped: InfoSection[] = data.map((row: any) => ({
-              id: String(row.id),
-              title: row.title,
-              desc: row.description || row.desc || '',
-              content: row.content || '',
-              createdAt: row.created_at || new Date().toISOString(),
-              updatedAt: row.updated_at || undefined,
-              authorName: row.author_name || undefined,
-              isCustom: row.is_custom !== undefined ? Boolean(row.is_custom) : true
-            }));
+    // 1. Try Supabase first if configured
+    if (isSupabaseConfigured() && supabase) {
+      try {
+        // A. Try dedicated info_sections table
+        const { data: infoData, error: infoError } = await supabase
+          .from('info_sections')
+          .select('*')
+          .order('created_at', { ascending: false });
 
-            // Combine with default sections
-            const existingIds = new Set(mapped.map(m => m.id));
-            const merged = [
-              ...mapped,
-              ...DEFAULT_INFO_SECTIONS.filter(def => !existingIds.has(def.id))
-            ];
-
-            setInfoSections(merged);
-            safeLocalStorage.setItem('tierrita_info_sections', JSON.stringify(merged));
-            return;
-          }
-        } catch (supabaseErr) {
-          console.warn('Supabase info_sections fetch error:', supabaseErr);
+        if (!infoError && Array.isArray(infoData) && infoData.length > 0) {
+          loadedFromSupabase = infoData.map((row: any) => ({
+            id: String(row.id),
+            title: row.title,
+            desc: row.description || row.desc || '',
+            content: row.content || '',
+            createdAt: row.created_at || new Date().toISOString(),
+            updatedAt: row.updated_at || undefined,
+            authorName: row.author_name || undefined,
+            isCustom: row.is_custom !== undefined ? Boolean(row.is_custom) : true
+          }));
         }
+      } catch {
+        // ignore error
       }
 
-      // 2. Try Node/Express server API fallback
-      try {
-        const res = await fetch('/api/info-sections');
-        const contentType = res.headers.get('content-type') || '';
-        if (res.ok && contentType.includes('application/json')) {
-          const serverData = await res.json();
-          if (Array.isArray(serverData) && serverData.length > 0) {
-            setInfoSections(serverData);
-            safeLocalStorage.setItem('tierrita_info_sections', JSON.stringify(serverData));
-          }
-        }
-      } catch {}
-    };
+      // B. If info_sections had no rows or error, try posts table (where location = '__TIERRITA_SYSTEM_INFO__')
+      if (!loadedFromSupabase) {
+        try {
+          const { data: postsData, error: postsError } = await supabase
+            .from('posts')
+            .select('*')
+            .eq('location', '__TIERRITA_SYSTEM_INFO__')
+            .order('created_at', { ascending: false });
 
+          if (!postsError && Array.isArray(postsData) && postsData.length > 0) {
+            const mappedFromPosts: InfoSection[] = [];
+            postsData.forEach((row: any) => {
+              try {
+                const parsed = JSON.parse(row.caption);
+                if (parsed && parsed.title) {
+                  mappedFromPosts.push({
+                    id: String(row.id),
+                    title: parsed.title,
+                    desc: parsed.desc || parsed.description || '',
+                    content: parsed.content || '',
+                    createdAt: parsed.createdAt || row.created_at,
+                    updatedAt: parsed.updatedAt,
+                    authorName: parsed.authorName || row.author_name,
+                    isCustom: true
+                  });
+                }
+              } catch {}
+            });
+            if (mappedFromPosts.length > 0) {
+              loadedFromSupabase = mappedFromPosts;
+            }
+          }
+        } catch {}
+      }
+    }
+
+    if (loadedFromSupabase && loadedFromSupabase.length > 0) {
+      const existingIds = new Set(loadedFromSupabase.map(m => m.id));
+      const merged = [
+        ...loadedFromSupabase,
+        ...DEFAULT_INFO_SECTIONS.filter(def => !existingIds.has(def.id))
+      ];
+      setInfoSections(merged);
+      safeLocalStorage.setItem('tierrita_info_sections', JSON.stringify(merged));
+      return;
+    }
+
+    // 2. Try Node/Express server API fallback
+    try {
+      const res = await fetch('/api/info-sections');
+      const contentType = res.headers.get('content-type') || '';
+      if (res.ok && contentType.includes('application/json')) {
+        const serverData = await res.json();
+        if (Array.isArray(serverData) && serverData.length > 0) {
+          setInfoSections(serverData);
+          safeLocalStorage.setItem('tierrita_info_sections', JSON.stringify(serverData));
+        }
+      }
+    } catch {}
+  };
+
+  // Realtime subscription + cross-tab BroadcastChannel + 3s auto-poll
+  useEffect(() => {
+    // 1. Cross-tab sync in the same browser (instantly updates guest accounts in other tabs/windows)
+    let bc: BroadcastChannel | null = null;
+    try {
+      bc = new BroadcastChannel('tierrita_info_sections_sync');
+      bc.onmessage = (event) => {
+        if (event.data?.type === 'CREATE' && event.data.section) {
+          setInfoSections(prev => {
+            if (prev.some(s => s.id === event.data.section.id)) return prev;
+            return [event.data.section, ...prev];
+          });
+        } else if (event.data?.type === 'UPDATE' && event.data.section) {
+          setInfoSections(prev => prev.map(s => s.id === event.data.section.id ? event.data.section : s));
+        } else if (event.data?.type === 'DELETE' && event.data.sectionId) {
+          setInfoSections(prev => prev.filter(s => s.id !== event.data.sectionId));
+        }
+      };
+    } catch {}
+
+    // 2. Initial load
     loadSections();
+
+    // 3. Supabase Realtime channel subscription
+    let channel: any = null;
+    if (isSupabaseConfigured() && supabase) {
+      try {
+        channel = supabase.channel('realtime_info_sections_watch')
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'posts' }, (payload: any) => {
+            if (
+              payload?.new?.location === '__TIERRITA_SYSTEM_INFO__' || 
+              payload?.old?.location === '__TIERRITA_SYSTEM_INFO__' ||
+              String(payload?.new?.id || '').startsWith('info-') ||
+              String(payload?.old?.id || '').startsWith('info-')
+            ) {
+              loadSections();
+            }
+          })
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'info_sections' }, () => {
+            loadSections();
+          })
+          .subscribe();
+      } catch {}
+    }
+
+    // 4. Auto-poll interval every 3 seconds to guarantee instant UI sync on all devices & guests
+    const pollInterval = setInterval(() => {
+      loadSections();
+    }, 3000);
+
+    return () => {
+      clearInterval(pollInterval);
+      if (bc) bc.close();
+      if (channel && supabase) {
+        supabase.removeChannel(channel);
+      }
+    };
   }, []);
 
   // Ordenar secciones informativas de nuevo a antigüedad (las más recientes arriba)
@@ -269,6 +362,13 @@ export default function App() {
     setInfoSections(prev => prev.map(s => s.id === updated.id ? updated : s));
     setActiveInfoSection(updated);
 
+    // Broadcast immediately to other tabs/windows in the same browser
+    try {
+      const bc = new BroadcastChannel('tierrita_info_sections_sync');
+      bc.postMessage({ type: 'UPDATE', section: updated });
+      bc.close();
+    } catch {}
+
     // 1. Update in Supabase if configured
     if (isSupabaseConfigured() && supabase) {
       try {
@@ -279,9 +379,23 @@ export default function App() {
           content: updated.content,
           updated_at: new Date().toISOString()
         });
-      } catch (err) {
-        console.error('Error updating info section in Supabase:', err);
-      }
+      } catch {}
+
+      try {
+        await supabase.from('posts').upsert({
+          id: updated.id,
+          author_name: updated.authorName || currentUser.name,
+          author_username: '@latierrita_app',
+          author_avatar: '🇨🇴',
+          location: '__TIERRITA_SYSTEM_INFO__',
+          image_url: '',
+          caption: JSON.stringify(updated),
+          likes_count: 0,
+          comments_count: 0,
+          saves_count: 0,
+          created_at: updated.createdAt || new Date().toISOString()
+        });
+      } catch {}
     }
 
     // 2. Persist to server API
@@ -302,13 +416,21 @@ export default function App() {
     });
     setActiveInfoSection(null);
 
+    // Broadcast immediately to other tabs/windows
+    try {
+      const bc = new BroadcastChannel('tierrita_info_sections_sync');
+      bc.postMessage({ type: 'DELETE', sectionId });
+      bc.close();
+    } catch {}
+
     // 1. Delete in Supabase if configured
     if (isSupabaseConfigured() && supabase) {
       try {
         await supabase.from('info_sections').delete().eq('id', sectionId);
-      } catch (err) {
-        console.error('Error deleting info section from Supabase:', err);
-      }
+      } catch {}
+      try {
+        await supabase.from('posts').delete().eq('id', sectionId);
+      } catch {}
     }
 
     // 2. Persist to server API
@@ -431,7 +553,9 @@ export default function App() {
           .order('created_at', { ascending: false });
 
         if (!error && data && Array.isArray(data)) {
-          const loaded: ProfilePost[] = data.map((row: any) => ({
+          const loaded: ProfilePost[] = data
+            .filter((row: any) => !String(row.id).startsWith('info-') && row.location !== '__TIERRITA_SYSTEM_INFO__')
+            .map((row: any) => ({
             id: String(row.id),
             authorId: String(row.author_id || 'unknown'),
             authorName: row.author_name || 'Usuario',
@@ -692,6 +816,13 @@ export default function App() {
     setInfoSections(prev => [newSection, ...prev]);
     handleOpenInfoSection(newSection);
 
+    // Broadcast immediately to other tabs/windows in the same browser (including guest accounts)
+    try {
+      const bc = new BroadcastChannel('tierrita_info_sections_sync');
+      bc.postMessage({ type: 'CREATE', section: newSection });
+      bc.close();
+    } catch {}
+
     // 1. Persist to Supabase if configured
     if (isSupabaseConfigured() && supabase) {
       try {
@@ -705,9 +836,23 @@ export default function App() {
           created_at: newSection.createdAt,
           updated_at: newSection.updatedAt
         });
-      } catch (err) {
-        console.error('Error saving info section to Supabase:', err);
-      }
+      } catch {}
+
+      try {
+        await supabase.from('posts').upsert({
+          id: newSection.id,
+          author_name: newSection.authorName || currentUser.name,
+          author_username: '@latierrita_app',
+          author_avatar: '🇨🇴',
+          location: '__TIERRITA_SYSTEM_INFO__',
+          image_url: '',
+          caption: JSON.stringify(newSection),
+          likes_count: 0,
+          comments_count: 0,
+          saves_count: 0,
+          created_at: newSection.createdAt
+        });
+      } catch {}
     }
 
     // 2. Persist to server API so all guests and users see it
