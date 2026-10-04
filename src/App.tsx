@@ -204,50 +204,52 @@ export default function App() {
 
   // Load info sections from Supabase (primary VPS database) and backend server (fallback)
   const loadSections = async () => {
-    let loadedFromSupabase: InfoSection[] | null = null;
+    let customLoaded: InfoSection[] = [];
 
     // 1. Try Supabase first if configured
     if (isSupabaseConfigured() && supabase) {
+      const combinedMap = new Map<string, InfoSection>();
+
+      // A. Try dedicated info_sections table
       try {
-        // A. Try dedicated info_sections table
         const { data: infoData, error: infoError } = await supabase
           .from('info_sections')
           .select('*')
           .order('created_at', { ascending: false });
 
         if (!infoError && Array.isArray(infoData) && infoData.length > 0) {
-          loadedFromSupabase = infoData.map((row: any) => ({
-            id: String(row.id),
-            title: row.title,
-            desc: row.description || row.desc || '',
-            content: row.content || '',
-            createdAt: row.created_at || new Date().toISOString(),
-            updatedAt: row.updated_at || undefined,
-            authorName: row.author_name || undefined,
-            isCustom: row.is_custom !== undefined ? Boolean(row.is_custom) : true
-          }));
+          infoData.forEach((row: any) => {
+            combinedMap.set(String(row.id), {
+              id: String(row.id),
+              title: row.title,
+              desc: row.description || row.desc || '',
+              content: row.content || '',
+              createdAt: row.created_at || new Date().toISOString(),
+              updatedAt: row.updated_at || undefined,
+              authorName: row.author_name || undefined,
+              isCustom: row.is_custom !== undefined ? Boolean(row.is_custom) : true
+            });
+          });
         }
-      } catch {
-        // ignore error
-      }
+      } catch {}
 
-      // B. If info_sections had no rows or error, try posts table (where location = '__TIERRITA_SYSTEM_INFO__')
-      if (!loadedFromSupabase) {
-        try {
-          const { data: postsData, error: postsError } = await supabase
-            .from('posts')
-            .select('*')
-            .eq('location', '__TIERRITA_SYSTEM_INFO__')
-            .order('created_at', { ascending: false });
+      // B. Try posts table (where location = '__TIERRITA_SYSTEM_INFO__')
+      try {
+        const { data: postsData, error: postsError } = await supabase
+          .from('posts')
+          .select('*')
+          .eq('location', '__TIERRITA_SYSTEM_INFO__')
+          .order('created_at', { ascending: false });
 
-          if (!postsError && Array.isArray(postsData) && postsData.length > 0) {
-            const mappedFromPosts: InfoSection[] = [];
-            postsData.forEach((row: any) => {
-              try {
-                const parsed = JSON.parse(row.caption);
-                if (parsed && parsed.title) {
-                  mappedFromPosts.push({
-                    id: String(row.id),
+        if (!postsError && Array.isArray(postsData) && postsData.length > 0) {
+          postsData.forEach((row: any) => {
+            try {
+              const parsed = JSON.parse(row.caption);
+              if (parsed && parsed.title) {
+                const secId = String(row.id);
+                if (!combinedMap.has(secId)) {
+                  combinedMap.set(secId, {
+                    id: secId,
                     title: parsed.title,
                     desc: parsed.desc || parsed.description || '',
                     content: parsed.content || '',
@@ -257,20 +259,19 @@ export default function App() {
                     isCustom: true
                   });
                 }
-              } catch {}
-            });
-            if (mappedFromPosts.length > 0) {
-              loadedFromSupabase = mappedFromPosts;
-            }
-          }
-        } catch {}
-      }
+              }
+            } catch {}
+          });
+        }
+      } catch {}
+
+      customLoaded = Array.from(combinedMap.values());
     }
 
-    if (loadedFromSupabase && loadedFromSupabase.length > 0) {
-      const existingIds = new Set(loadedFromSupabase.map(m => m.id));
+    if (customLoaded.length > 0) {
+      const existingIds = new Set(customLoaded.map(m => m.id));
       const merged = [
-        ...loadedFromSupabase,
+        ...customLoaded,
         ...DEFAULT_INFO_SECTIONS.filter(def => !existingIds.has(def.id))
       ];
       setInfoSections(merged);
@@ -323,9 +324,7 @@ export default function App() {
           .on('postgres_changes', { event: '*', schema: 'public', table: 'posts' }, (payload: any) => {
             if (
               payload?.new?.location === '__TIERRITA_SYSTEM_INFO__' || 
-              payload?.old?.location === '__TIERRITA_SYSTEM_INFO__' ||
-              String(payload?.new?.id || '').startsWith('info-') ||
-              String(payload?.old?.id || '').startsWith('info-')
+              payload?.old?.location === '__TIERRITA_SYSTEM_INFO__'
             ) {
               loadSections();
             }
@@ -382,19 +381,9 @@ export default function App() {
       } catch {}
 
       try {
-        await supabase.from('posts').upsert({
-          id: updated.id,
-          author_name: updated.authorName || currentUser.name,
-          author_username: '@latierrita_app',
-          author_avatar: '🇨🇴',
-          location: '__TIERRITA_SYSTEM_INFO__',
-          image_url: '',
-          caption: JSON.stringify(updated),
-          likes_count: 0,
-          comments_count: 0,
-          saves_count: 0,
-          created_at: updated.createdAt || new Date().toISOString()
-        });
+        await supabase.from('posts').update({
+          caption: JSON.stringify(updated)
+        }).eq('id', updated.id);
       } catch {}
     }
 
@@ -813,13 +802,26 @@ export default function App() {
   };
 
   const handleCreateSection = async (newSection: InfoSection) => {
-    setInfoSections(prev => [newSection, ...prev]);
-    handleOpenInfoSection(newSection);
+    // Ensure ID is a valid PostgreSQL UUID
+    const isValidUUID = (str: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+    const generateUUID = () => {
+      if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+        const r = (Math.random() * 16) | 0;
+        const v = c === 'x' ? r : (r & 0x3) | 0x8;
+        return v.toString(16);
+      });
+    };
+    const validId = isValidUUID(newSection.id) ? newSection.id : generateUUID();
+    const finalizedSection: InfoSection = { ...newSection, id: validId };
+
+    setInfoSections(prev => [finalizedSection, ...prev]);
+    handleOpenInfoSection(finalizedSection);
 
     // Broadcast immediately to other tabs/windows in the same browser (including guest accounts)
     try {
       const bc = new BroadcastChannel('tierrita_info_sections_sync');
-      bc.postMessage({ type: 'CREATE', section: newSection });
+      bc.postMessage({ type: 'CREATE', section: finalizedSection });
       bc.close();
     } catch {}
 
@@ -827,39 +829,46 @@ export default function App() {
     if (isSupabaseConfigured() && supabase) {
       try {
         await supabase.from('info_sections').upsert({
-          id: newSection.id,
-          title: newSection.title,
-          description: newSection.desc,
-          content: newSection.content,
-          author_name: newSection.authorName || currentUser.name,
+          id: finalizedSection.id,
+          title: finalizedSection.title,
+          description: finalizedSection.desc,
+          content: finalizedSection.content,
+          author_name: finalizedSection.authorName || currentUser.name,
           is_custom: true,
-          created_at: newSection.createdAt,
-          updated_at: newSection.updatedAt
+          created_at: finalizedSection.createdAt,
+          updated_at: finalizedSection.updatedAt
         });
       } catch {}
 
       try {
-        await supabase.from('posts').upsert({
-          id: newSection.id,
-          author_name: newSection.authorName || currentUser.name,
+        const { error: postErr } = await supabase.from('posts').upsert({
+          id: validId,
+          author_name: finalizedSection.authorName || currentUser.name || 'La Tierrita',
           author_username: '@latierrita_app',
           author_avatar: '🇨🇴',
           location: '__TIERRITA_SYSTEM_INFO__',
-          image_url: '',
-          caption: JSON.stringify(newSection),
+          image_url: 'https://images.unsplash.com/photo-1596401057633-54a8fe8ef647?auto=format&fit=crop&w=400&q=80',
+          caption: JSON.stringify(finalizedSection),
           likes_count: 0,
           comments_count: 0,
           saves_count: 0,
-          created_at: newSection.createdAt
+          created_at: finalizedSection.createdAt || new Date().toISOString()
         });
-      } catch {}
+        if (postErr) {
+          console.error('[La Tierrita Supabase Sync]', postErr);
+        } else {
+          console.log('[La Tierrita Supabase Sync] Sección guardada con éxito en Supabase');
+        }
+      } catch (err) {
+        console.error('[La Tierrita Supabase Sync]', err);
+      }
     }
 
     // 2. Persist to server API so all guests and users see it
     fetch('/api/info-sections', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newSection)
+      body: JSON.stringify(finalizedSection)
     }).catch(err => console.error('Error saving section to server:', err));
   };
 
