@@ -93,8 +93,9 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
     e.preventDefault();
     if (!selectedImage) return;
 
+    const newPostId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : ('post-' + Date.now());
     const newPost: ProfilePost = {
-      id: 'post-' + Date.now(),
+      id: newPostId,
       authorId: currentUser.id,
       authorName: `${currentUser.name} ${currentUser.lastName}`.trim(),
       authorUsername: currentUser.username,

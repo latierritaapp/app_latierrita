@@ -56,6 +56,7 @@ import { ExploreCarousel } from './components/ExploreCarousel';
 import { FlagEmoji, TextWithFlags } from './components/FlagEmoji';
 import logo from './assets/images/la_tierrita_logo.png';
 import { countTotalComments, isImageAvatar } from './utils/commentUtils';
+import { supabase, isSupabaseConfigured } from './lib/supabase';
 
 // Safe storage wrapper to prevent crash if iframe or browser blocks localStorage
 const safeLocalStorage = {
@@ -244,22 +245,28 @@ export default function App() {
     fetchLiveRate();
   }, []);
 
-  // Helper to safely load posts from localStorage
+  // Helper to safely load posts from localStorage, excluding fictitious/mock posts
   const loadSavedPosts = (key: string, defaultPosts: ProfilePost[]): ProfilePost[] => {
     try {
       const raw = safeLocalStorage.getItem(key);
       if (raw) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) {
-          // If any post uses a fictitious Unsplash image, reset to default posts to purge fictitious images
-          const hasUnsplash = parsed.some(p => p.imageUrl && (p.imageUrl.includes('unsplash.com') || p.imageUrl.includes('images.unsplash.com')));
-          if (!hasUnsplash) {
-            // If it is saved posts and contains legacy post-s IDs, reset to default posts
-            if (key === 'tierrita_saved_posts' && parsed.some(p => p.id && p.id.startsWith('post-s'))) {
-              return defaultPosts;
-            }
-            return parsed;
-          }
+          // Remove any fictitious posts with mock IDs or AI-generated demo assets
+          const filtered = parsed.filter((p: any) => 
+            p && 
+            p.id && 
+            !String(p.id).startsWith('post-latierrita') && 
+            !String(p.id).startsWith('post-fictitious') &&
+            !(p.imageUrl && (
+              p.imageUrl.includes('colombian_bakery') || 
+              p.imageUrl.includes('colombian_empanadas') || 
+              p.imageUrl.includes('la_tierrita_banner') || 
+              p.imageUrl.includes('vallenato_salsa') ||
+              p.imageUrl.includes('unsplash.com')
+            ))
+          );
+          return filtered;
         }
       }
     } catch {
@@ -267,6 +274,47 @@ export default function App() {
     }
     return defaultPosts;
   };
+
+  // Cargar publicaciones reales desde Supabase si está configurado
+  useEffect(() => {
+    if (!isSupabaseConfigured() || !supabase) return;
+    const client = supabase;
+
+    const fetchRealPosts = async () => {
+      try {
+        const { data, error } = await client
+          .from('posts')
+          .select('*')
+          .order('created_at', { ascending: false });
+
+        if (!error && data && Array.isArray(data)) {
+          const loaded: ProfilePost[] = data.map((row: any) => ({
+            id: String(row.id),
+            authorId: String(row.author_id || 'unknown'),
+            authorName: row.author_name || 'Usuario',
+            authorUsername: row.author_username || '@usuario',
+            authorAvatar: row.author_avatar || '🇨🇴',
+            location: row.location || undefined,
+            imageUrl: row.image_url,
+            caption: row.caption || '',
+            likesCount: row.likes_count || 0,
+            commentsCount: row.comments_count || 0,
+            savesCount: row.saves_count || 0,
+            timestamp: new Date(row.created_at).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' }),
+            disableComments: row.disable_comments,
+            hideLikesCount: row.hide_likes_count,
+            comments: []
+          }));
+          setUserPosts(loaded);
+          safeLocalStorage.setItem('tierrita_user_posts', JSON.stringify(loaded));
+        }
+      } catch (err) {
+        console.error('Error fetching Supabase posts:', err);
+      }
+    };
+
+    fetchRealPosts();
+  }, []);
 
   // Profile grid tabs & posts state
   const [profileTab, setProfileTab] = useState<ProfileTabType>('publicaciones');
@@ -827,8 +875,12 @@ export default function App() {
     setActiveFeedList(prev => updateList(prev));
   };
 
-  const handlePublishPost = (newPost: ProfilePost) => {
-    setUserPosts(prev => [newPost, ...prev]);
+  const handlePublishPost = async (newPost: ProfilePost) => {
+    setUserPosts(prev => {
+      const updated = [newPost, ...prev];
+      safeLocalStorage.setItem('tierrita_user_posts', JSON.stringify(updated));
+      return updated;
+    });
     setProfileTab('publicaciones');
     
     // Update user posts count
@@ -838,6 +890,30 @@ export default function App() {
         postsCount: (currentUser.postsCount || 0) + 1
       };
       handleUpdateUser(updatedUser);
+    }
+
+    // Persist to Supabase if configured
+    if (isSupabaseConfigured() && supabase) {
+      const client = supabase;
+      try {
+        await client.from('posts').insert({
+          id: newPost.id,
+          author_name: newPost.authorName,
+          author_username: newPost.authorUsername,
+          author_avatar: newPost.authorAvatar,
+          location: newPost.location || '',
+          image_url: newPost.imageUrl,
+          caption: newPost.caption,
+          likes_count: 0,
+          comments_count: 0,
+          saves_count: 0,
+          disable_comments: Boolean(newPost.disableComments),
+          hide_likes_count: Boolean(newPost.hideLikesCount),
+          created_at: new Date().toISOString()
+        });
+      } catch (err) {
+        console.error('Error saving post to Supabase:', err);
+      }
     }
   };
 
@@ -1556,41 +1632,71 @@ export default function App() {
                     </h3>
                   </div>
 
-                  <div className="grid grid-cols-3 gap-1 rounded-2xl overflow-hidden">
-                    {allPostsPool.map((post) => (
-                      <div
-                        key={post.id}
-                        onClick={() => {
-                          setSelectedFeedPostId(post.id);
-                          setFeedModalTitle('Explorar publicaciones');
-                          setActiveFeedList(allPostsPool);
-                          setIsFeedModalOpen(true);
-                        }}
-                        className="relative aspect-square bg-black/10 dark:bg-black/30 overflow-hidden group cursor-pointer"
-                      >
-                        <img
-                          src={post.imageUrl}
-                          alt={post.caption}
-                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
-                          loading="lazy"
-                        />
-                        <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2 text-white text-xs font-bold">
-                          {(post.likesCount || 0) > 0 && (
-                            <div className="flex items-center gap-1">
-                              <HeartIcon className="w-3.5 h-3.5 fill-white" />
-                              <span>{post.likesCount}</span>
-                            </div>
-                          )}
-                          {(countTotalComments(post.comments) || post.commentsCount || 0) > 0 && (
-                            <div className="flex items-center gap-1">
-                              <MessageCircle className="w-3.5 h-3.5 fill-white" />
-                              <span>{countTotalComments(post.comments) || post.commentsCount}</span>
-                            </div>
-                          )}
-                        </div>
+                  {allPostsPool.length === 0 ? (
+                    <div className="py-12 px-4 rounded-2xl bg-black/[0.02] dark:bg-white/[0.02] border border-dashed border-black/10 dark:border-white/10 text-center flex flex-col items-center justify-center space-y-3">
+                      <div className="w-12 h-12 rounded-full bg-[#003087]/10 dark:bg-white/10 flex items-center justify-center text-xl text-[#003087] dark:text-[#FFCD00]">
+                        <ImageIcon className="w-6 h-6" />
                       </div>
-                    ))}
-                  </div>
+                      <div>
+                        <h4 className="font-bold text-xs text-[#003087] dark:text-[#FFCD00]">
+                          Aún no hay publicaciones en la comunidad
+                        </h4>
+                        <p className="text-[11px] text-[#C4C4C4] max-w-xs mt-1 font-medium">
+                          ¡Sé el primero en compartir un momento o foto con los compatriotas en España!
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (currentUser.role === 'invitado') {
+                            setGuestNoticeMessage('Inicia sesión o regístrate para subir una publicación.');
+                          } else {
+                            setIsCreatePostModalOpen(true);
+                          }
+                        }}
+                        className="px-4 py-2 bg-[#FFCD00] hover:bg-[#ffe066] text-[#003087] font-bold text-xs rounded-xl shadow-xs active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Compartir publicación</span>
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-3 gap-1 rounded-2xl overflow-hidden">
+                      {allPostsPool.map((post) => (
+                        <div
+                          key={post.id}
+                          onClick={() => {
+                            setSelectedFeedPostId(post.id);
+                            setFeedModalTitle('Explorar publicaciones');
+                            setActiveFeedList(allPostsPool);
+                            setIsFeedModalOpen(true);
+                          }}
+                          className="relative aspect-square bg-black/10 dark:bg-black/30 overflow-hidden group cursor-pointer"
+                        >
+                          <img
+                            src={post.imageUrl}
+                            alt={post.caption}
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                            loading="lazy"
+                          />
+                          <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2 text-white text-xs font-bold">
+                            {(post.likesCount || 0) > 0 && (
+                              <div className="flex items-center gap-1">
+                                <HeartIcon className="w-3.5 h-3.5 fill-white" />
+                                <span>{post.likesCount}</span>
+                              </div>
+                            )}
+                            {(countTotalComments(post.comments) || post.commentsCount || 0) > 0 && (
+                              <div className="flex items-center gap-1">
+                                <MessageCircle className="w-3.5 h-3.5 fill-white" />
+                                <span>{countTotalComments(post.comments) || post.commentsCount}</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             );
