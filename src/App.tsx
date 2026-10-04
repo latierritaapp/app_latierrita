@@ -62,27 +62,62 @@ import { DEFAULT_INFO_SECTIONS } from './data/defaultInfoSections';
 import { InfoSectionDetailModal } from './components/InfoSectionDetailModal';
 import { CreateInfoSectionModal } from './components/CreateInfoSectionModal';
 
-// Safe storage wrapper to prevent crash if iframe or browser blocks localStorage
+// Safe storage wrapper with dual localStorage, sessionStorage, and document.cookie fallbacks
 const safeLocalStorage = {
   getItem: (key: string): string | null => {
     try {
-      if (typeof window !== 'undefined' && 'localStorage' in window) {
-        return window.localStorage.getItem(key);
+      if (typeof window !== 'undefined') {
+        // 1. Try window.localStorage
+        if ('localStorage' in window) {
+          const val = window.localStorage.getItem(key);
+          if (val !== null) return val;
+        }
+        // 2. Try window.sessionStorage
+        if ('sessionStorage' in window) {
+          const sVal = window.sessionStorage.getItem(key);
+          if (sVal !== null) return sVal;
+        }
+        // 3. Fallback to document.cookie
+        if (typeof document !== 'undefined' && document.cookie) {
+          const match = document.cookie.match(new RegExp('(?:^|;\\s*)' + encodeURIComponent(key) + '=([^;]*)'));
+          if (match && match[1]) {
+            return decodeURIComponent(match[1]);
+          }
+        }
       }
     } catch {}
     return null;
   },
   setItem: (key: string, value: string): void => {
     try {
-      if (typeof window !== 'undefined' && 'localStorage' in window) {
-        window.localStorage.setItem(key, value);
+      if (typeof window !== 'undefined') {
+        if ('localStorage' in window) {
+          window.localStorage.setItem(key, value);
+        }
+        if ('sessionStorage' in window) {
+          window.sessionStorage.setItem(key, value);
+        }
+        if (typeof document !== 'undefined') {
+          // Store persistent cookie for 365 days
+          const d = new Date();
+          d.setTime(d.getTime() + (365 * 24 * 60 * 60 * 1000));
+          document.cookie = `${encodeURIComponent(key)}=${encodeURIComponent(value)}; expires=${d.toUTCString()}; path=/; SameSite=Lax`;
+        }
       }
     } catch {}
   },
   removeItem: (key: string): void => {
     try {
-      if (typeof window !== 'undefined' && 'localStorage' in window) {
-        window.localStorage.removeItem(key);
+      if (typeof window !== 'undefined') {
+        if ('localStorage' in window) {
+          window.localStorage.removeItem(key);
+        }
+        if ('sessionStorage' in window) {
+          window.sessionStorage.removeItem(key);
+        }
+        if (typeof document !== 'undefined') {
+          document.cookie = `${encodeURIComponent(key)}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; SameSite=Lax`;
+        }
       }
     } catch {}
   }
