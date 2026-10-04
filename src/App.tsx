@@ -269,13 +269,17 @@ export default function App() {
     }
 
     if (customLoaded.length > 0) {
-      const existingIds = new Set(customLoaded.map(m => m.id));
-      const merged = [
-        ...customLoaded,
-        ...DEFAULT_INFO_SECTIONS.filter(def => !existingIds.has(def.id))
-      ];
-      setInfoSections(merged);
-      safeLocalStorage.setItem('tierrita_info_sections', JSON.stringify(merged));
+      setInfoSections(prev => {
+        const customIds = new Set(customLoaded.map(c => c.id));
+        const localCustom = prev.filter(p => p.isCustom && !customIds.has(p.id));
+        const merged = [
+          ...customLoaded,
+          ...localCustom,
+          ...DEFAULT_INFO_SECTIONS.filter(def => !customIds.has(def.id) && !localCustom.some(lc => lc.id === def.id))
+        ];
+        safeLocalStorage.setItem('tierrita_info_sections', JSON.stringify(merged));
+        return merged;
+      });
       return;
     }
 
@@ -286,8 +290,13 @@ export default function App() {
       if (res.ok && contentType.includes('application/json')) {
         const serverData = await res.json();
         if (Array.isArray(serverData) && serverData.length > 0) {
-          setInfoSections(serverData);
-          safeLocalStorage.setItem('tierrita_info_sections', JSON.stringify(serverData));
+          setInfoSections(prev => {
+            const serverIds = new Set(serverData.map((s: any) => s.id));
+            const localCustom = prev.filter(p => p.isCustom && !serverIds.has(p.id));
+            const merged = [...localCustom, ...serverData];
+            safeLocalStorage.setItem('tierrita_info_sections', JSON.stringify(merged));
+            return merged;
+          });
         }
       }
     } catch {}
