@@ -62,27 +62,18 @@ import { DEFAULT_INFO_SECTIONS } from './data/defaultInfoSections';
 import { InfoSectionDetailModal } from './components/InfoSectionDetailModal';
 import { CreateInfoSectionModal } from './components/CreateInfoSectionModal';
 
-// Safe storage wrapper with dual localStorage, sessionStorage, and document.cookie fallbacks
+// Safe storage wrapper to prevent crash if iframe or browser blocks localStorage
 const safeLocalStorage = {
   getItem: (key: string): string | null => {
     try {
       if (typeof window !== 'undefined') {
-        // 1. Try window.localStorage
         if ('localStorage' in window) {
           const val = window.localStorage.getItem(key);
           if (val !== null) return val;
         }
-        // 2. Try window.sessionStorage
         if ('sessionStorage' in window) {
           const sVal = window.sessionStorage.getItem(key);
           if (sVal !== null) return sVal;
-        }
-        // 3. Fallback to document.cookie
-        if (typeof document !== 'undefined' && document.cookie) {
-          const match = document.cookie.match(new RegExp('(?:^|;\\s*)' + encodeURIComponent(key) + '=([^;]*)'));
-          if (match && match[1]) {
-            return decodeURIComponent(match[1]);
-          }
         }
       }
     } catch {}
@@ -97,12 +88,6 @@ const safeLocalStorage = {
         if ('sessionStorage' in window) {
           window.sessionStorage.setItem(key, value);
         }
-        if (typeof document !== 'undefined') {
-          // Store persistent cookie for 365 days
-          const d = new Date();
-          d.setTime(d.getTime() + (365 * 24 * 60 * 60 * 1000));
-          document.cookie = `${encodeURIComponent(key)}=${encodeURIComponent(value)}; expires=${d.toUTCString()}; path=/; SameSite=Lax`;
-        }
       }
     } catch {}
   },
@@ -114,9 +99,6 @@ const safeLocalStorage = {
         }
         if ('sessionStorage' in window) {
           window.sessionStorage.removeItem(key);
-        }
-        if (typeof document !== 'undefined') {
-          document.cookie = `${encodeURIComponent(key)}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; SameSite=Lax`;
         }
       }
     } catch {}
@@ -937,14 +919,25 @@ export default function App() {
     } catch {}
   }, [safeSavedPosts]);
 
-  // Auth Modal State - Only open if no active session exists
+  // Auth Modal State - Only open if user is not authenticated or explicitly logged out
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(() => {
-    const sessionActive = safeLocalStorage.getItem('tierrita_session_active');
-    const savedUser = safeLocalStorage.getItem('tierrita_current_user');
-    // If user has explicitly logged in or entered as guest and hasn't logged out, keep session on reload
-    if (sessionActive === 'true' && savedUser) {
-      return false;
-    }
+    try {
+      const isLoggedOut = safeLocalStorage.getItem('tierrita_logged_out');
+      if (isLoggedOut === 'true') {
+        return true;
+      }
+      const sessionActive = safeLocalStorage.getItem('tierrita_session_active');
+      if (sessionActive === 'true') {
+        return false;
+      }
+      const savedUser = safeLocalStorage.getItem('tierrita_current_user');
+      if (savedUser) {
+        const parsed = JSON.parse(savedUser);
+        if (parsed && parsed.id && parsed.username) {
+          return false;
+        }
+      }
+    } catch {}
     return true;
   });
   const [authModalMode, setAuthModalMode] = useState<'login' | 'register'>('login');
@@ -1091,6 +1084,7 @@ export default function App() {
     setCurrentUser(user);
     safeLocalStorage.setItem('tierrita_current_user', JSON.stringify(user));
     safeLocalStorage.setItem('tierrita_session_active', 'true');
+    safeLocalStorage.removeItem('tierrita_logged_out');
     setIsAuthModalOpen(false);
   };
 
@@ -1101,6 +1095,7 @@ export default function App() {
     setCurrentUser(newUser);
     safeLocalStorage.setItem('tierrita_current_user', JSON.stringify(newUser));
     safeLocalStorage.setItem('tierrita_session_active', 'true');
+    safeLocalStorage.removeItem('tierrita_logged_out');
     setIsAuthModalOpen(false);
   };
 
@@ -1109,6 +1104,7 @@ export default function App() {
     setCurrentUser(guest);
     safeLocalStorage.setItem('tierrita_current_user', JSON.stringify(guest));
     safeLocalStorage.removeItem('tierrita_session_active');
+    safeLocalStorage.setItem('tierrita_logged_out', 'true');
     setIsAuthModalOpen(true);
   };
 
