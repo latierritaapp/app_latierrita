@@ -1,0 +1,6 @@
+{
+  "name": "La Tierrita - Colombianos en España",
+  "description": "La red social de la comunidad colombiana en España. Conecta con otros colombianos, comparte anuncios de empleo y vivienda, y descubre los rincones de nuestra cultura.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

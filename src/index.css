@@ -1,0 +1,69 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-serif: "Plus Jakarta Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif;
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif;
+
+  --color-brand-blue: #003087;
+  --color-brand-silver: #C4C4C4;
+  --color-brand-gold: #FFCD00;
+  --color-brand-white: #FFFFFF;
+}
+
+:root {
+  --app-bg: #FFFFFF;
+  --app-primary: #003087;
+  --app-secondary: #C4C4C4;
+  background-color: var(--app-bg);
+  color: var(--app-primary);
+}
+
+.dark {
+  --app-bg: linear-gradient(180deg, #003087 0%, #000000 100%);
+  --app-primary: #C4C4C4;
+  --app-secondary: #FFCD00;
+  background: linear-gradient(180deg, #003087 0%, #000000 100%);
+  background-attachment: fixed;
+  min-height: 100vh;
+  color: var(--app-primary);
+}
+
+body, html, input, button, select, textarea {
+  font-family: "Plus Jakarta Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", "Segoe UI Symbol", sans-serif;
+  font-variant-emoji: emoji;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Custom smooth scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.3);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.5);
+}
+
+/* Instagram Double Tap Heart Pop Animation */
+@keyframes heartPop {
+  0% { transform: scale(0) rotate(-10deg); opacity: 0; }
+  15% { transform: scale(1.3) rotate(-5deg); opacity: 0.95; }
+  35% { transform: scale(1) rotate(0deg); opacity: 1; }
+  75% { transform: scale(1) rotate(0deg); opacity: 1; }
+  100% { transform: scale(0) rotate(15deg); opacity: 0; }
+}
+
+.scale-up-pop-heart {
+  animation: heartPop 0.8s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+}

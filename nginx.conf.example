@@ -1,0 +1,25 @@
+# Configuración recomendada de Nginx para La Tierrita en tu VPS
+# Ruta habitual en el VPS: /etc/nginx/sites-available/latierrita
+
+server {
+    listen 80;
+    server_name tudominio.com www.tudominio.com; # Reemplaza con tu dominio o la IP de tu VPS
+
+    # Redireccionar HTTP a HTTPS automáticamente (Certbot lo configurará por ti, o puedes descomentar cuando tengas SSL)
+    # return 301 https://$host$request_uri;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Ajuste para subida de imágenes (anuncios, fotos de perfil, etc.)
+        client_max_body_size 25M;
+    }
+}
