@@ -195,12 +195,49 @@ export default function App() {
   const [activeInfoSection, setActiveInfoSection] = useState<InfoSection | null>(null);
   const [isCreateInfoModalOpen, setIsCreateInfoModalOpen] = useState(false);
 
-  // Sync info sections to localStorage
+  // Sync info sections to localStorage and fetch from server API
   useEffect(() => {
     try {
       safeLocalStorage.setItem('tierrita_info_sections', JSON.stringify(infoSections));
     } catch {}
   }, [infoSections]);
+
+  // Load info sections from backend server on mount (so guests & other devices see all sections)
+  useEffect(() => {
+    fetch('/api/info-sections')
+      .then(res => res.ok ? res.json() : null)
+      .then((serverData: InfoSection[] | null) => {
+        if (Array.isArray(serverData) && serverData.length > 0) {
+          try {
+            const localSaved = safeLocalStorage.getItem('tierrita_info_sections');
+            if (localSaved) {
+              const localParsed: InfoSection[] = JSON.parse(localSaved);
+              if (Array.isArray(localParsed)) {
+                const serverIds = new Set(serverData.map(s => s.id));
+                const missingOnServer = localParsed.filter(s => s.isCustom && !serverIds.has(s.id));
+                if (missingOnServer.length > 0) {
+                  missingOnServer.forEach(sec => {
+                    fetch('/api/info-sections', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify(sec)
+                    }).catch(() => {});
+                  });
+                  const merged = [...missingOnServer, ...serverData];
+                  setInfoSections(merged);
+                  safeLocalStorage.setItem('tierrita_info_sections', JSON.stringify(merged));
+                  return;
+                }
+              }
+            }
+          } catch {}
+
+          setInfoSections(serverData);
+          safeLocalStorage.setItem('tierrita_info_sections', JSON.stringify(serverData));
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   // Ordenar secciones informativas de nuevo a antigüedad (las más recientes arriba)
   const sortedInfoSections = [...infoSections].sort((a, b) => {
@@ -212,6 +249,13 @@ export default function App() {
   const handleSaveInfoSection = (updated: InfoSection) => {
     setInfoSections(prev => prev.map(s => s.id === updated.id ? updated : s));
     setActiveInfoSection(updated);
+
+    // Persist to server API
+    fetch(`/api/info-sections/${encodeURIComponent(updated.id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updated)
+    }).catch(err => console.error('Error updating section on server:', err));
   };
 
   const handleDeleteInfoSection = (sectionId: string) => {
@@ -223,6 +267,11 @@ export default function App() {
       return updated;
     });
     setActiveInfoSection(null);
+
+    // Persist to server API
+    fetch(`/api/info-sections/${encodeURIComponent(sectionId)}`, {
+      method: 'DELETE'
+    }).catch(err => console.error('Error deleting section on server:', err));
   };
 
   const [eurAmount, setEurAmount] = useState<string>('100');
@@ -599,6 +648,13 @@ export default function App() {
   const handleCreateSection = (newSection: InfoSection) => {
     setInfoSections(prev => [newSection, ...prev]);
     handleOpenInfoSection(newSection);
+
+    // Persist to server API so all guests and users see it
+    fetch('/api/info-sections', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newSection)
+    }).catch(err => console.error('Error saving section to server:', err));
   };
 
   const safeTaggedPosts = currentUser.role === 'invitado' ? [] : (Array.isArray(taggedPosts) ? taggedPosts : INITIAL_TAGGED_POSTS);
