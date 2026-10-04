@@ -78,6 +78,13 @@ const safeLocalStorage = {
         window.localStorage.setItem(key, value);
       }
     } catch {}
+  },
+  removeItem: (key: string): void => {
+    try {
+      if (typeof window !== 'undefined' && 'localStorage' in window) {
+        window.localStorage.removeItem(key);
+      }
+    } catch {}
   }
 };
 
@@ -895,8 +902,16 @@ export default function App() {
     } catch {}
   }, [safeSavedPosts]);
 
-  // Auth Modal State (Open login modal by default as requested)
-  const [isAuthModalOpen, setIsAuthModalOpen] = useState(true);
+  // Auth Modal State - Only open if no active session exists
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(() => {
+    const sessionActive = safeLocalStorage.getItem('tierrita_session_active');
+    const savedUser = safeLocalStorage.getItem('tierrita_current_user');
+    // If user has explicitly logged in or entered as guest and hasn't logged out, keep session on reload
+    if (sessionActive === 'true' && savedUser) {
+      return false;
+    }
+    return true;
+  });
   const [authModalMode, setAuthModalMode] = useState<'login' | 'register'>('login');
   const [guestNoticeMessage, setGuestNoticeMessage] = useState<string | null>(null);
 
@@ -1040,6 +1055,7 @@ export default function App() {
   const handleLogin = (user: AppUser) => {
     setCurrentUser(user);
     safeLocalStorage.setItem('tierrita_current_user', JSON.stringify(user));
+    safeLocalStorage.setItem('tierrita_session_active', 'true');
     setIsAuthModalOpen(false);
   };
 
@@ -1049,6 +1065,7 @@ export default function App() {
     safeLocalStorage.setItem('tierrita_users', JSON.stringify(updated));
     setCurrentUser(newUser);
     safeLocalStorage.setItem('tierrita_current_user', JSON.stringify(newUser));
+    safeLocalStorage.setItem('tierrita_session_active', 'true');
     setIsAuthModalOpen(false);
   };
 
@@ -1056,6 +1073,7 @@ export default function App() {
     const guest = createGuestUser();
     setCurrentUser(guest);
     safeLocalStorage.setItem('tierrita_current_user', JSON.stringify(guest));
+    safeLocalStorage.removeItem('tierrita_session_active');
     setIsAuthModalOpen(true);
   };
 
