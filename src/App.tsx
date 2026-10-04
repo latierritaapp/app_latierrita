@@ -56,7 +56,7 @@ import { ExploreCarousel } from './components/ExploreCarousel';
 import { FlagEmoji, TextWithFlags } from './components/FlagEmoji';
 import logo from './assets/images/la_tierrita_logo.png';
 import { countTotalComments, isImageAvatar } from './utils/commentUtils';
-import { supabase, isSupabaseConfigured } from './lib/supabase';
+import { supabase, isSupabaseConfigured, getSupabaseConfigStatus } from './lib/supabase';
 import { InfoSection } from './types/infoSection';
 import { DEFAULT_INFO_SECTIONS } from './data/defaultInfoSections';
 import { InfoSectionDetailModal } from './components/InfoSectionDetailModal';
@@ -1864,6 +1864,28 @@ export default function App() {
 
                  {inicioSubTab === 'informacion' && (
                   <div className="space-y-4">
+                    {/* Indicador de conexión a Supabase visible únicamente para administradores */}
+                    {(currentUser.role === 'administrador' || currentUser.isStaff) && (
+                      <div className={`p-3 rounded-2xl border text-xs flex items-center justify-between gap-2.5 transition-all ${
+                        isSupabaseConfigured()
+                          ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-800 dark:text-emerald-300'
+                          : 'bg-amber-500/10 border-amber-500/20 text-amber-800 dark:text-amber-300'
+                      }`}>
+                        <div className="flex items-center gap-2.5">
+                          <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${isSupabaseConfigured() ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500 animate-bounce'}`} />
+                          <div>
+                            <p className="font-bold text-[11px] leading-tight">
+                              {isSupabaseConfigured() ? 'Base de datos Supabase conectada' : 'Base de datos Supabase NO conectada en este build'}
+                            </p>
+                            <p className="text-[10px] opacity-80 mt-0.5 leading-tight">
+                              {isSupabaseConfigured()
+                                ? 'Los botones nuevos se guardan en api.latierrita.tech y se transmiten en tiempo real a todos los usuarios.'
+                                : 'Falta el archivo .env en tu VPS con VITE_SUPABASE_URL y VITE_SUPABASE_ANON_KEY al compilar (npm run build).'}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                     {/* Botón que abre el módulo de divisas */}
                     <button
                       type="button"

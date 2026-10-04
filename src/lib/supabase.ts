@@ -15,3 +15,13 @@ export const supabase = isSupabaseConfigured()
       },
     })
   : null;
+
+export const getSupabaseConfigStatus = () => {
+  return {
+    isConfigured: isSupabaseConfigured(),
+    url: supabaseUrl || 'No configurada (vacía)',
+    hasKey: Boolean(supabaseAnonKey && supabaseAnonKey !== 'tu_anon_key_generada')
+  };
+};
+
+export { supabaseUrl };
